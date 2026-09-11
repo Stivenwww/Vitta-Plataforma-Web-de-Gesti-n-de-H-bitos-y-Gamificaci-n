@@ -288,7 +288,6 @@ erDiagram
 
 </div>
 
-> 💡 La especificación original contempla React para el frontend, Node.js con Express (o PHP) para el backend, y MySQL o PostgreSQL para la base de datos.
 
 ---
 
