@@ -10,6 +10,7 @@ import type { Streak } from '../models/streak';
 import { HttpError } from '../utils/httpError';
 import { validateCreateRecordInput, validateHabitId } from '../utils/validation';
 import { updateStreakForRecord as defaultUpdateStreak } from './streakService';
+import { awardPointsForRecord as defaultAwardPoints } from './pointService';
 
 export interface RecordDependencies {
   findHabit: (id: number, usuarioId: number) => Promise<Habit | null>;
@@ -26,6 +27,7 @@ export interface RecordDependencies {
     fechaIso: string,
     cumplido: boolean,
   ) => Promise<Streak>;
+  awardPoints: (usuarioId: number, registroId: number) => Promise<number>;
 }
 
 const defaultDependencies: RecordDependencies = {
@@ -34,6 +36,7 @@ const defaultDependencies: RecordDependencies = {
   findAllByHabit: repoFindAll,
   createRecord: repoCreate,
   updateStreak: defaultUpdateStreak,
+  awardPoints: defaultAwardPoints,
 };
 
 async function requireOwnHabit(
@@ -76,6 +79,11 @@ export async function createRecordService(
     // racha queda consultable en GET /api/habits/:id/streak (HU-16 CA-04).
     const record = await deps.createRecord(habitoId, input.fecha, input.cumplido, input.valor);
     await deps.updateStreak(habitoId, record.fecha, input.cumplido);
+    // HAB-125: solo un cumplimiento suma puntos. HAB-123: es idempotente
+    // por registro (índice único en movimientos_puntos), nunca suma doble.
+    if (input.cumplido) {
+      await deps.awardPoints(usuarioId, record.id);
+    }
     return record;
   } catch (err: unknown) {
     // Protección contra carreras concurrentes: UNIQUE(habito_id, fecha).

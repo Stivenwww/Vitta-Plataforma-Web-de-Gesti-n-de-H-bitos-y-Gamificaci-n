@@ -134,3 +134,20 @@ CREATE TABLE IF NOT EXISTS plantillas_habitos (
   meta_valor_sugerida  NUMERIC NULL CHECK (meta_valor_sugerida > 0),
   unidad               TEXT NULL
 );
+
+
+-- =========================================================
+-- HAB-123: evitar puntos duplicados por el mismo cumplimiento
+-- (agregar AL FINAL de src/db/schema.sql; es idempotente)
+-- =========================================================
+
+-- Cada movimiento de puntos puede ligarse al registro diario que lo originó.
+ALTER TABLE movimientos_puntos
+  ADD COLUMN IF NOT EXISTS registro_id INTEGER NULL
+    REFERENCES registros_diarios (id) ON DELETE RESTRICT;
+
+-- Un mismo registro no puede generar dos veces el mismo tipo de movimiento.
+-- (Parcial: los movimientos sin registro, p. ej. bonus de logros, no se ven afectados.)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_movimientos_puntos_registro_motivo
+  ON movimientos_puntos (registro_id, motivo)
+  WHERE registro_id IS NOT NULL;
