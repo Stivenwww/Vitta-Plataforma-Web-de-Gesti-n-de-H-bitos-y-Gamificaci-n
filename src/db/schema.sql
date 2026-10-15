@@ -70,3 +70,67 @@ CREATE TABLE IF NOT EXISTS rachas (
   racha_maxima  INTEGER NOT NULL DEFAULT 0 CHECK (racha_maxima >= 0),
   actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 
+-- Modelo completo: logros, VitaPuntos, bitácora y hábitos ampliados
+-- (agregar AL FINAL de src/db/schema.sql; es idempotente)
+-- Convenciones: TEXT + CHECK, TIMESTAMPTZ, historial sin CASCADE.
+-- 
+
+-- 1) Bitácora: qué leyó, qué ejercicio hizo, qué estudió, etc.
+ALTER TABLE registros_diarios
+  ADD COLUMN IF NOT EXISTS reflexion TEXT NULL;
+
+-- 2) Catálogo de logros
+CREATE TABLE IF NOT EXISTS logros (
+  id           SERIAL PRIMARY KEY,
+  nombre       TEXT NOT NULL UNIQUE CHECK (char_length(btrim(nombre)) > 0),
+  descripcion  TEXT NOT NULL DEFAULT '',
+  icono        TEXT NULL,
+  condicion    TEXT NOT NULL CHECK (char_length(btrim(condicion)) > 0),
+  puntos_bonus INTEGER NOT NULL DEFAULT 0 CHECK (puntos_bonus >= 0),
+  creado_en    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 3) Logros obtenidos por cada usuario (N a M)
+CREATE TABLE IF NOT EXISTS usuario_logros (
+  id             SERIAL PRIMARY KEY,
+  usuario_id     INTEGER NOT NULL REFERENCES usuarios (id) ON DELETE CASCADE,
+  logro_id       INTEGER NOT NULL REFERENCES logros (id) ON DELETE RESTRICT,
+  obtenido_en    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_usuario_logro UNIQUE (usuario_id, logro_id)
+);
+CREATE INDEX IF NOT EXISTS idx_usuario_logros_usuario
+  ON usuario_logros (usuario_id);
+
+-- 4) Historial de VitaPuntos (log: sin CASCADE)
+CREATE TABLE IF NOT EXISTS movimientos_puntos (
+  id         SERIAL PRIMARY KEY,
+  usuario_id INTEGER NOT NULL REFERENCES usuarios (id) ON DELETE RESTRICT,
+  puntos     INTEGER NOT NULL CHECK (puntos <> 0),
+  motivo     TEXT NOT NULL CHECK (char_length(btrim(motivo)) > 0),
+  creado_en  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_movimientos_puntos_usuario_fecha
+  ON movimientos_puntos (usuario_id, creado_en DESC);
+
+-- 5) Hábitos más completos (todas opcionales para no romper lo existente)
+ALTER TABLE habitos
+  ADD COLUMN IF NOT EXISTS categoria         TEXT NULL,
+  ADD COLUMN IF NOT EXISTS icono             TEXT NULL,
+  ADD COLUMN IF NOT EXISTS meta_valor        NUMERIC NULL CHECK (meta_valor > 0),
+  ADD COLUMN IF NOT EXISTS unidad            TEXT NULL,
+  ADD COLUMN IF NOT EXISTS dias_semana       SMALLINT[] NULL
+    CHECK (dias_semana <@ ARRAY[1,2,3,4,5,6,7]::SMALLINT[]),  -- 1=lunes ... 7=domingo
+  ADD COLUMN IF NOT EXISTS hora_recordatorio TIME NULL,
+  ADD COLUMN IF NOT EXISTS activo            BOOLEAN NOT NULL DEFAULT TRUE;
+
+-- 6) (Opcional) Plantillas de hábitos predefinidos
+CREATE TABLE IF NOT EXISTS plantillas_habitos (
+  id                   SERIAL PRIMARY KEY,
+  nombre               TEXT NOT NULL UNIQUE CHECK (char_length(btrim(nombre)) > 0),
+  categoria            TEXT NULL,
+  icono                TEXT NULL,
+  meta_valor_sugerida  NUMERIC NULL CHECK (meta_valor_sugerida > 0),
+  unidad               TEXT NULL
+);
