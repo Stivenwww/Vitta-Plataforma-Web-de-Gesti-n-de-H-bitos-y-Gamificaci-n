@@ -48,7 +48,7 @@ export async function insertMovementForRecord(
 
 export async function getTotalPoints(usuarioId: number): Promise<number> {
   const result = await query<{ total: number }>(
-    `SELECT COALESCE(SUM(puntos), 0)::int AS total
+    `SELECT COALESCE(SUM(puntos) FILTER (WHERE puntos > 0), 0)::int AS total
        FROM movimientos_puntos
       WHERE usuario_id = $1`,
     [usuarioId],

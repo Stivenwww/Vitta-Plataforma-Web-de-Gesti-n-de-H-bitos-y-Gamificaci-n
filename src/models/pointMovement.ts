@@ -9,10 +9,14 @@ export interface PointMovement {
 }
 
 export interface UserPoints {
+  /** VitaPuntos acumulados (el nivel depende de lo acumulado, no del saldo). */
   puntos_totales: number;
   nivel: number;
-  /** Puntos acumulados dentro del nivel actual (0 .. PUNTOS_POR_NIVEL - 1). */
+  nombre_nivel: string;
+  /** Puntos acumulados dentro del nivel actual. */
   puntos_en_nivel: number;
-  /** Puntos que faltan para subir al siguiente nivel. */
-  puntos_para_siguiente: number;
+  /** Puntos que faltan para el siguiente nivel; null en el nivel máximo. */
+  puntos_para_siguiente: number | null;
+  /** Puntos totales donde empieza el siguiente nivel; null en el nivel máximo. */
+  puntos_nivel_siguiente: number | null;
 }

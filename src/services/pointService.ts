@@ -5,9 +5,17 @@ import {
 } from '../repositories/pointRepository';
 import type { PointMovement, UserPoints } from '../models/pointMovement';
 
-// TODO(equipo): confirmar estos valores con la especificación / Jira.
+// Especificación UX y Producto v2.0, §6.3 (VitaPuntos) y §6.4 (Niveles).
 export const PUNTOS_POR_CUMPLIMIENTO = 10;
-export const PUNTOS_POR_NIVEL = 100;
+
+export const NIVELES: ReadonlyArray<{ nivel: number; nombre: string; desde: number }> = [
+  { nivel: 1, nombre: 'Inicio', desde: 0 },
+  { nivel: 2, nombre: 'Explorador', desde: 100 },
+  { nivel: 3, nombre: 'Constante', desde: 250 },
+  { nivel: 4, nombre: 'En Equilibrio', desde: 500 },
+  { nivel: 5, nombre: 'Impulsor', desde: 1000 },
+  { nivel: 6, nombre: 'Maestro de la Constancia', desde: 2000 },
+];
 export const MOTIVO_HABITO_CUMPLIDO = 'habito_cumplido';
 
 export interface PointDependencies {
@@ -28,18 +36,26 @@ const defaultDependencies: PointDependencies = {
 };
 
 /**
- * HAB-124: nivel según puntos acumulados. Pura: sin E/S, testeable sin BD.
- * Nivel 1 desde 0 puntos; sube cada PUNTOS_POR_NIVEL puntos.
+ * HAB-124: nivel según los VitaPuntos acumulados (spec v2.0 §6.4).
+ * Pura: sin E/S, testeable sin BD.
  */
 export function computeLevel(puntosTotales: number): UserPoints {
   const total = Math.max(0, Math.floor(puntosTotales));
-  const nivel = Math.floor(total / PUNTOS_POR_NIVEL) + 1;
-  const enNivel = total % PUNTOS_POR_NIVEL;
+  let idx = 0;
+  for (let i = 0; i < NIVELES.length; i += 1) {
+    if (total >= NIVELES[i]!.desde) {
+      idx = i;
+    }
+  }
+  const actual = NIVELES[idx]!;
+  const siguiente = NIVELES[idx + 1];
   return {
     puntos_totales: total,
-    nivel,
-    puntos_en_nivel: enNivel,
-    puntos_para_siguiente: PUNTOS_POR_NIVEL - enNivel,
+    nivel: actual.nivel,
+    nombre_nivel: actual.nombre,
+    puntos_en_nivel: total - actual.desde,
+    puntos_para_siguiente: siguiente ? siguiente.desde - total : null,
+    puntos_nivel_siguiente: siguiente ? siguiente.desde : null,
   };
 }
 
