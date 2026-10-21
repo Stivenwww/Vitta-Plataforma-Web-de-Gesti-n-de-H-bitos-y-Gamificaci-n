@@ -2,6 +2,7 @@ import express from 'express';
 import { authRoutes } from './routes/auth.routes';
 import { habitRoutes } from './routes/habit.routes';
 import { pointsRoutes } from './routes/points.routes';
+import { dashboardRoutes } from './routes/dashboard.routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 
 export const app = express();
@@ -15,6 +16,7 @@ app.get('/health', (_req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/habits', habitRoutes);
 app.use('/api/points', pointsRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

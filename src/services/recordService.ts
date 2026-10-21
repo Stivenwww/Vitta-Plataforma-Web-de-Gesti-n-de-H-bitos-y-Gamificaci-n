@@ -11,6 +11,8 @@ import { HttpError } from '../utils/httpError';
 import { validateCreateRecordInput, validateHabitId } from '../utils/validation';
 import { updateStreakForRecord as defaultUpdateStreak } from './streakService';
 import { awardPointsForRecord as defaultAwardPoints } from './pointService';
+import { deleteRecordAndPoints as defaultDeleteRecord } from '../repositories/recordUndoRepository';
+import { recomputeStreak as defaultRecomputeStreak } from './streakRecalc';
 
 export interface RecordDependencies {
   findHabit: (id: number, usuarioId: number) => Promise<Habit | null>;
@@ -28,6 +30,8 @@ export interface RecordDependencies {
     cumplido: boolean,
   ) => Promise<Streak>;
   awardPoints: (usuarioId: number, registroId: number) => Promise<number>;
+  deleteRecordWithPoints: (registroId: number, habitoId: number) => Promise<boolean>;
+  recomputeStreak: (habitoId: number) => Promise<Streak>;
 }
 
 const defaultDependencies: RecordDependencies = {
@@ -37,6 +41,8 @@ const defaultDependencies: RecordDependencies = {
   createRecord: repoCreate,
   updateStreak: defaultUpdateStreak,
   awardPoints: defaultAwardPoints,
+  deleteRecordWithPoints: defaultDeleteRecord,
+  recomputeStreak: defaultRecomputeStreak,
 };
 
 async function requireOwnHabit(
@@ -92,4 +98,36 @@ export async function createRecordService(
     }
     throw err;
   }
+}
+
+function validateRegistroId(id: unknown): number {
+  const n = typeof id === 'string' ? Number(id) : id;
+  if (typeof n !== 'number' || !Number.isInteger(n) || n <= 0) {
+    throw new HttpError(400, 'id de registro inválido');
+  }
+  return n;
+}
+
+/**
+ * Desmarcar un hábito (HAB-94, spec v2.0 §4.3 "Deshacer un registro"):
+ * borra el registro y sus puntos y recalcula la racha.
+ */
+export async function deleteRecordService(
+  usuarioId: number,
+  habitoIdRaw: unknown,
+  registroIdRaw: unknown,
+  deps: RecordDependencies = defaultDependencies,
+) {
+  const habitoId = await requireOwnHabit(usuarioId, habitoIdRaw, deps);
+  const registroId = validateRegistroId(registroIdRaw);
+  const registros = await deps.findAllByHabit(habitoId);
+  if (!registros.some((r) => r.id === registroId)) {
+    throw new HttpError(404, 'registro no encontrado');
+  }
+  const eliminado = await deps.deleteRecordWithPoints(registroId, habitoId);
+  if (!eliminado) {
+    throw new HttpError(404, 'registro no encontrado');
+  }
+  const racha = await deps.recomputeStreak(habitoId);
+  return { eliminado: true, registro_id: registroId, racha };
 }
