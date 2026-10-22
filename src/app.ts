@@ -2,6 +2,7 @@ import express from 'express';
 import { authRoutes } from './routes/auth.routes';
 import { habitRoutes } from './routes/habit.routes';
 import { pointsRoutes } from './routes/points.routes';
+import { logrosRoutes, plantillasRoutes, usersRoutes } from './routes/catalog.routes';
 import { dashboardRoutes } from './routes/dashboard.routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 
@@ -17,6 +18,9 @@ app.use('/api/auth', authRoutes);
 app.use('/api/habits', habitRoutes);
 app.use('/api/points', pointsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/plantillas', plantillasRoutes);
+app.use('/api/logros', logrosRoutes);
+app.use('/api/users', usersRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
