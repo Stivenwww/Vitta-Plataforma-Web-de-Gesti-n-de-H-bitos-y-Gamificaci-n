@@ -15,7 +15,7 @@ export async function getDashboardHandler(req: Request, res: Response, next: Nex
     const dashboard = await getDashboard(requireUserId(req), {
       fecha: req.query.fecha,
       semanas: req.query.semanas,
-    });
+    }, req.timeZone);
     res.status(200).json(dashboard);
   } catch (err) {
     next(err);

@@ -2,6 +2,8 @@ export interface PointMovement {
   id: number;
   usuario_id: number;
   registro_id: number | null;
+  /** Logro que originó el bono, si aplica. */
+  logro_id: number | null;
   puntos: number;
   motivo: string;
   /** Instante UTC en ISO 8601. */

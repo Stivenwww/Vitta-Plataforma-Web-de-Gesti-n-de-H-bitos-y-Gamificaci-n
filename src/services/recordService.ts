@@ -1,133 +1,170 @@
+import type { PoolClient } from 'pg';
+import { withTransaction } from '../db/pool';
 import {
-  createRecord as repoCreate,
-  findAllByHabit as repoFindAll,
-  findExisting as repoFindExisting,
+  createRecord,
+  deleteRecordAndPoints,
+  findAllByHabit,
+  findByHabitAndDay,
+  updateRecordProgress,
 } from '../repositories/recordRepository';
-import { findByIdForUsuario as repoFindHabit } from '../repositories/habitRepository';
+import { findByIdForUsuario } from '../repositories/habitRepository';
+import { lockUser } from '../repositories/userRepository';
 import type { DailyRecord } from '../models/dailyRecord';
 import type { Habit } from '../models/habit';
 import type { Streak } from '../models/streak';
 import { HttpError } from '../utils/httpError';
-import { validateCreateRecordInput, validateHabitId } from '../utils/validation';
-import { updateStreakForRecord as defaultUpdateStreak } from './streakService';
-import { awardPointsForRecord as defaultAwardPoints } from './pointService';
-import { deleteRecordAndPoints as defaultDeleteRecord } from '../repositories/recordUndoRepository';
-import { recomputeStreak as defaultRecomputeStreak } from './streakRecalc';
+import {
+  validateCreateRecordInput,
+  validateHabitId,
+  validateId,
+  validateProgressInput,
+} from '../utils/validation';
+import { todayIn } from '../utils/timezone';
+import { recalculateStreak } from './streakService';
+import { awardPointsForRecord, revokePointsForRecord } from './pointService';
+import { evaluateAchievements, type Logro } from './achievementService';
 
-export interface RecordDependencies {
-  findHabit: (id: number, usuarioId: number) => Promise<Habit | null>;
-  findExisting: (habitoId: number, fecha: string) => Promise<DailyRecord | null>;
-  findAllByHabit: (habitoId: number) => Promise<DailyRecord[]>;
-  createRecord: (
-    habitoId: number,
-    fecha: string,
-    cumplido: boolean,
-    valor: number | null,
-  ) => Promise<DailyRecord>;
-  updateStreak: (
-    habitoId: number,
-    fechaIso: string,
-    cumplido: boolean,
-  ) => Promise<Streak>;
-  awardPoints: (usuarioId: number, registroId: number) => Promise<number>;
-  deleteRecordWithPoints: (registroId: number, habitoId: number) => Promise<boolean>;
-  recomputeStreak: (habitoId: number) => Promise<Streak>;
+/** Respuesta de escritura: el registro (HU-15 CA-04) más sus efectos. */
+export interface RecordWriteResult extends DailyRecord {
+  racha: Streak;
+  logros_desbloqueados: Logro[];
 }
 
-const defaultDependencies: RecordDependencies = {
-  findHabit: repoFindHabit,
-  findExisting: repoFindExisting,
-  findAllByHabit: repoFindAll,
-  createRecord: repoCreate,
-  updateStreak: defaultUpdateStreak,
-  awardPoints: defaultAwardPoints,
-  deleteRecordWithPoints: defaultDeleteRecord,
-  recomputeStreak: defaultRecomputeStreak,
-};
+function isUniqueViolation(err: unknown): boolean {
+  return !!err && typeof err === 'object' && (err as { code?: string }).code === '23505';
+}
 
-async function requireOwnHabit(
-  usuarioId: number,
-  habitoIdRaw: unknown,
-  deps: RecordDependencies,
-): Promise<number> {
-  const habitoId = validateHabitId(habitoIdRaw);
-  const habit = await deps.findHabit(habitoId, usuarioId);
+/** Bloquea al usuario y verifica que el hábito sea suyo (404 si no). */
+async function lockOwnHabit(client: PoolClient, usuarioId: number, habitoId: number): Promise<Habit> {
+  if (!(await lockUser(usuarioId, client))) {
+    throw new HttpError(401, 'no autenticado');
+  }
+  const habit = await findByIdForUsuario(habitoId, usuarioId, client);
   if (!habit) {
     throw new HttpError(404, 'hábito no encontrado');
   }
-  return habitoId;
+  return habit;
 }
 
-export async function listRecords(
-  usuarioId: number,
-  habitoIdRaw: unknown,
-  deps: RecordDependencies = defaultDependencies,
-) {
-  const habitoId = await requireOwnHabit(usuarioId, habitoIdRaw, deps);
-  return deps.findAllByHabit(habitoId);
+function requireActive(habit: Habit): void {
+  if (!habit.activo) {
+    throw new HttpError(409, 'hábito archivado: no admite nuevos registros');
+  }
 }
 
+export async function listRecords(usuarioId: number, habitoIdRaw: unknown): Promise<DailyRecord[]> {
+  const habitoId = validateHabitId(habitoIdRaw);
+  const habit = await findByIdForUsuario(habitoId, usuarioId);
+  if (!habit) {
+    throw new HttpError(404, 'hábito no encontrado');
+  }
+  return findAllByHabit(habitoId);
+}
+
+/**
+ * HU-15 → HU-16 → puntos → logros en UNA transacción: o se guarda todo o
+ * nada. Un día ya registrado → 409 (CA-03), también ante carreras gracias al
+ * índice único uq_registros_habito_dia.
+ */
 export async function createRecordService(
   usuarioId: number,
   habitoIdRaw: unknown,
   body: unknown,
-  deps: RecordDependencies = defaultDependencies,
-) {
-  const habitoId = await requireOwnHabit(usuarioId, habitoIdRaw, deps);
-  const input = validateCreateRecordInput(body);
-  const existing = await deps.findExisting(habitoId, input.fecha);
-  if (existing) {
-    throw new HttpError(409, 'ya existe registro para esta fecha');
-  }
+  tz: string,
+): Promise<RecordWriteResult> {
+  const habitoId = validateHabitId(habitoIdRaw);
+  const input = validateCreateRecordInput(body, tz);
   try {
-    // RETURNING * sin segunda consulta. HU-16: tras guardar, se recalcula
-    // la racha; la respuesta sigue siendo el registro (HU-15 CA-04) y la
-    // racha queda consultable en GET /api/habits/:id/streak (HU-16 CA-04).
-    const record = await deps.createRecord(habitoId, input.fecha, input.cumplido, input.valor);
-    await deps.updateStreak(habitoId, record.fecha, input.cumplido);
-    // HAB-125: solo un cumplimiento suma puntos. HAB-123: es idempotente
-    // por registro (índice único en movimientos_puntos), nunca suma doble.
-    if (input.cumplido) {
-      await deps.awardPoints(usuarioId, record.id);
-    }
-    return record;
-  } catch (err: unknown) {
-    // Protección contra carreras concurrentes: UNIQUE(habito_id, fecha).
-    if (err && typeof err === 'object' && (err as { code?: string }).code === '23505') {
+    return await withTransaction(async (client) => {
+      const habit = await lockOwnHabit(client, usuarioId, habitoId);
+      requireActive(habit);
+      if (await findByHabitAndDay(habitoId, input.dia, client)) {
+        throw new HttpError(409, 'ya existe registro para esta fecha');
+      }
+      const record = await createRecord({ habitoId, ...input }, client);
+      const racha = await recalculateStreak(habitoId, habit.frecuencia, todayIn(tz), true, client);
+      // HAB-125: solo un cumplimiento suma puntos; HAB-123: idempotente por registro.
+      if (record.cumplido) {
+        await awardPointsForRecord(usuarioId, record.id, client);
+      }
+      const { desbloqueados } = await evaluateAchievements(usuarioId, client);
+      return { ...record, racha, logros_desbloqueados: desbloqueados };
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
       throw new HttpError(409, 'ya existe registro para esta fecha');
     }
     throw err;
   }
 }
 
-function validateRegistroId(id: unknown): number {
-  const n = typeof id === 'string' ? Number(id) : id;
-  if (typeof n !== 'number' || !Number.isInteger(n) || n <= 0) {
-    throw new HttpError(400, 'id de registro inválido');
+/**
+ * Avance parcial del día (PATCH /api/habits/:id/progreso). `valor` es el
+ * total acumulado del día, no un incremento. Crea el registro del día o
+ * actualiza el existente (nunca duplica). Queda cumplido solo cuando
+ * `valor >= meta_valor`; si baja de la meta se retiran sus puntos.
+ */
+export async function saveProgressService(
+  usuarioId: number,
+  habitoIdRaw: unknown,
+  body: unknown,
+  tz: string,
+): Promise<RecordWriteResult> {
+  const habitoId = validateHabitId(habitoIdRaw);
+  const input = validateProgressInput(body, tz);
+  try {
+    return await withTransaction(async (client) => {
+      const habit = await lockOwnHabit(client, usuarioId, habitoId);
+      requireActive(habit);
+      if (habit.meta_valor === null) {
+        throw new HttpError(400, 'el hábito no tiene meta numérica (meta_valor): use POST /records');
+      }
+      const cumplido = input.valor >= habit.meta_valor;
+      const existing = await findByHabitAndDay(habitoId, input.dia, client);
+      const record = existing
+        ? await updateRecordProgress(existing.id, { cumplido, valor: input.valor, notas: input.notas }, client)
+        : await createRecord(
+            { habitoId, fecha: input.fecha, dia: input.dia, cumplido, valor: input.valor, notas: input.notas ?? null },
+            client,
+          );
+      const antes = existing?.cumplido ?? false;
+      if (cumplido && !antes) {
+        await awardPointsForRecord(usuarioId, record.id, client);
+      } else if (!cumplido && antes) {
+        await revokePointsForRecord(record.id, client);
+      }
+      // Bajar de la meta es una corrección: la máxima se recalcula del historial.
+      const racha = await recalculateStreak(habitoId, habit.frecuencia, todayIn(tz), !(antes && !cumplido), client);
+      const { desbloqueados } = await evaluateAchievements(usuarioId, client);
+      return { ...record, racha, logros_desbloqueados: desbloqueados };
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      throw new HttpError(409, 'el registro de este día se está guardando; reintente');
+    }
+    throw err;
   }
-  return n;
 }
 
 /**
  * Desmarcar un hábito (HAB-94, spec v2.0 §4.3 "Deshacer un registro"):
- * borra el registro y sus puntos y recalcula la racha.
+ * borra el registro y sus puntos y recalcula la racha, en una transacción.
+ * Los logros ya obtenidos no se retiran.
  */
 export async function deleteRecordService(
   usuarioId: number,
   habitoIdRaw: unknown,
   registroIdRaw: unknown,
-  deps: RecordDependencies = defaultDependencies,
+  tz: string,
 ) {
-  const habitoId = await requireOwnHabit(usuarioId, habitoIdRaw, deps);
-  const registroId = validateRegistroId(registroIdRaw);
-  const registros = await deps.findAllByHabit(habitoId);
-  if (!registros.some((r) => r.id === registroId)) {
-    throw new HttpError(404, 'registro no encontrado');
-  }
-  const eliminado = await deps.deleteRecordWithPoints(registroId, habitoId);
-  if (!eliminado) {
-    throw new HttpError(404, 'registro no encontrado');
-  }
-  const racha = await deps.recomputeStreak(habitoId);
-  return { eliminado: true, registro_id: registroId, racha };
+  const habitoId = validateHabitId(habitoIdRaw);
+  const registroId = validateId(registroIdRaw, 'id de registro');
+  return withTransaction(async (client) => {
+    const habit = await lockOwnHabit(client, usuarioId, habitoId);
+    if (!(await deleteRecordAndPoints(registroId, habitoId, client))) {
+      throw new HttpError(404, 'registro no encontrado');
+    }
+    const racha = await recalculateStreak(habitoId, habit.frecuencia, todayIn(tz), false, client);
+    return { eliminado: true, registro_id: registroId, racha };
+  });
 }

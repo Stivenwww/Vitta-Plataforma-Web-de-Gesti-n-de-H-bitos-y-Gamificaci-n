@@ -1,9 +1,9 @@
 import {
-  findActiveHabitsByUsuario as repoFindHabits,
+  findCalendarHabitsByUsuario as repoFindHabits,
   findRecordDaysByUsuario as repoFindRecordDays,
   findStreaksByUsuario as repoFindStreaks,
   type DayRecordRow,
-  type HabitScheduleRow,
+  type HabitCalendarRow,
   type HabitStreakRow,
 } from '../repositories/progressRepository';
 import { getUserPoints as defaultGetUserPoints } from './pointService';
@@ -11,11 +11,14 @@ import type { UserPoints } from '../models/pointMovement';
 import { HttpError } from '../utils/httpError';
 import {
   addDays,
-  eachDay,
+  buildDailySummary,
+  habitDueOn,
   isScheduled,
   parseFrecuencia,
   percent,
   resolveReferenceDay,
+  toScheduleRows,
+  type HabitScheduleRow,
 } from './progressService';
 
 export type EstadoHoy = 'cumplido' | 'no_cumplido' | 'pendiente';
@@ -115,39 +118,27 @@ export function buildDashboard(input: {
     habitos.map((h) => [h.id, parseFrecuencia(h.frecuencia)]),
   );
 
-  // Un hábito cuenta un día si toca ese día de la semana y ya existía
-  // (o tiene un registro ese día).
+  // Misma regla que GET /api/progress (habitDueOn): toca ese día de la semana
+  // y estaba vigente, o tiene un registro ese día.
   const cuenta = (h: HabitScheduleRow, dia: string): DayRecordRow | 'sin' | null => {
-    if (!isScheduled(schedules.get(h.id) ?? null, dia)) {
+    const rec = porHabitoDia.get(`${h.id}|${dia}`);
+    if (!habitDueOn(h, schedules.get(h.id) ?? null, dia, rec !== undefined)) {
       return null;
     }
-    const rec = porHabitoDia.get(`${h.id}|${dia}`);
-    if (rec) {
-      return rec;
-    }
-    return dia >= h.creado_dia ? 'sin' : null;
+    return rec ?? 'sin';
   };
 
   const desde = addDays(ref, -(input.semanas * 7 - 1));
-  const mapa: MapaCalorDia[] = eachDay(desde, ref).map((fecha) => {
-    let programados = 0;
-    let cumplidos = 0;
-    for (const h of habitos) {
-      const c = cuenta(h, fecha);
-      if (c === null) {
-        continue;
-      }
-      programados += 1;
-      if (c !== 'sin' && c.cumplido) {
-        cumplidos += 1;
-      }
-    }
-    return { fecha, programados, cumplidos, intensidad: intensity(programados, cumplidos) };
-  });
+  const mapa: MapaCalorDia[] = buildDailySummary({ desde, hasta: ref, habitos, registros }).map((d) => ({
+    fecha: d.fecha,
+    programados: d.total,
+    cumplidos: d.completados,
+    intensidad: intensity(d.total, d.completados),
+  }));
 
   const hoyHabitos: HabitoHoy[] = [];
   for (const h of habitos) {
-    const c = cuenta(h, ref);
+    const c = h.activo ? cuenta(h, ref) : null;
     if (c === null) {
       continue;
     }
@@ -194,7 +185,7 @@ export function buildDashboard(input: {
 }
 
 export interface DashboardDependencies {
-  findHabits: (usuarioId: number) => Promise<HabitScheduleRow[]>;
+  findHabits: (usuarioId: number) => Promise<HabitCalendarRow[]>;
   findRecordDays: (usuarioId: number, desde: string, hasta: string) => Promise<DayRecordRow[]>;
   findStreaks: (usuarioId: number) => Promise<HabitStreakRow[]>;
   getPoints: (usuarioId: number) => Promise<UserPoints>;
@@ -227,9 +218,10 @@ export function parseSemanas(raw: unknown): number {
 export async function getDashboard(
   usuarioId: number,
   params: { fecha?: unknown; semanas?: unknown },
+  tz: string,
   deps: DashboardDependencies = defaultDependencies,
 ): Promise<Dashboard> {
-  const ref = resolveReferenceDay(params.fecha, deps.now());
+  const ref = resolveReferenceDay(params.fecha, deps.now(), tz);
   const semanas = parseSemanas(params.semanas);
   const desde = addDays(ref, -(semanas * 7 - 1));
   const [habitos, registros, rachas, puntos] = await Promise.all([
@@ -238,5 +230,5 @@ export async function getDashboard(
     deps.findStreaks(usuarioId),
     deps.getPoints(usuarioId),
   ]);
-  return buildDashboard({ ref, semanas, habitos, registros, rachas, puntos });
+  return buildDashboard({ ref, semanas, habitos: toScheduleRows(habitos, tz), registros, rachas, puntos });
 }

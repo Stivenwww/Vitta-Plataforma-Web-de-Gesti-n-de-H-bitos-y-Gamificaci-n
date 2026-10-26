@@ -288,6 +288,41 @@ erDiagram
 
 </div>
 
+---
+
+## ⚙️ Backend: ejecución
+
+```bash
+cp .env.example .env        # DATABASE_URL, JWT_SECRET, ...
+npm install
+npm run migrate             # schema.sql + catalogos.sql en una transacción (idempotente)
+npm run seed                # opcional: demo@demo.vitta / Demo1234!
+npm run dev                 # API en http://localhost:3000
+npm test                    # unitarias + integración (crea la BD vitta_test en el mismo servidor)
+npm run typecheck && npm run build
+```
+
+Fechas: cada "día" es el día local del usuario. Por defecto `America/Bogota`; el cliente puede enviar `X-Timezone: <zona IANA>`.
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| POST | `/api/auth/register`, `/api/auth/login` | `{usuario: {id, nombre, correo, creado_en}, token}` |
+| GET / PATCH | `/api/users/me` | Perfil; `PATCH {nombre?, correo?}` → `{usuario, token}` (409 si el correo existe) |
+| PATCH | `/api/users/me/password` | `{contrasena_actual, contrasena_nueva}` → `{mensaje, token}`; invalida los tokens anteriores |
+| GET / POST | `/api/habits` | Hábitos activos (`?incluir_archivados=true`); campos `icono`, `categoria`, `meta_valor`, `unidad` |
+| GET / PUT / DELETE | `/api/habits/:id` | `PUT` parcial; `DELETE` archiva si el hábito tiene historial |
+| POST | `/api/habits/:id/archive`, `/api/habits/:id/restore` | Archivado lógico |
+| GET / POST | `/api/habits/:id/records` | Registro diario `{fecha?, cumplido, valor?, notas?}` (uno por día) |
+| PATCH | `/api/habits/:id/progreso` | Avance del día `{valor, fecha?, notas?}`; se completa al llegar a `meta_valor` |
+| DELETE | `/api/habits/:id/records/:registroId` | Desmarcar (retira puntos y recalcula racha) |
+| GET | `/api/habits/:id/streak`, `/api/habits/:id/progress` | Racha actual/máxima; progreso semanal o mensual |
+| GET | `/api/progress?desde=&hasta=` | `[{fecha, total, completados, parciales}]` de todos los hábitos |
+| GET | `/api/logros` | 14 logros con `obtenido`, `obtenido_en`, `progreso_actual`, `progreso_meta` |
+| GET / POST / PATCH / DELETE | `/api/recordatorios[/:id]` | `{habito_id, hora: "HH:MM", activo}` |
+| GET | `/api/points/me`, `/api/points/me/movements`, `/api/dashboard`, `/api/plantillas` | Puntos, dashboard y plantillas |
+
+Las respuestas de `POST /records` y `PATCH /progreso` incluyen, además del registro, `racha` y `logros_desbloqueados`.
+
 
 ---
 

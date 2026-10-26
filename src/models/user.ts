@@ -4,6 +4,7 @@ export interface User {
   correo: string;
   password_hash: string;
   creado_en: string;
+  token_version: number;
 }
 
 export interface UserPublic {

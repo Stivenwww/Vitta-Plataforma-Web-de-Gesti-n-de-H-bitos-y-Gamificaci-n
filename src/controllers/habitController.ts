@@ -5,6 +5,7 @@ import {
   deleteHabitService,
   getHabit,
   listHabits,
+  setArchivedService,
   updateHabitService,
 } from '../services/habitService';
 
@@ -18,7 +19,7 @@ function requireUserId(req: Request): number {
 
 export async function listHabitsHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const habits = await listHabits(requireUserId(req));
+    const habits = await listHabits(requireUserId(req), req.query.incluir_archivados);
     res.status(200).json(habits);
   } catch (err) {
     next(err);
@@ -54,8 +55,24 @@ export async function updateHabitHandler(req: Request, res: Response, next: Next
 
 export async function deleteHabitHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    await deleteHabitService(requireUserId(req), req.params.id);
-    res.status(200).json({ mensaje: 'hábito eliminado' });
+    const result = await deleteHabitService(requireUserId(req), req.params.id);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function archiveHabitHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    res.status(200).json(await setArchivedService(requireUserId(req), req.params.id, true));
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function restoreHabitHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    res.status(200).json(await setArchivedService(requireUserId(req), req.params.id, false));
   } catch (err) {
     next(err);
   }

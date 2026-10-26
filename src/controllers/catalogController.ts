@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { HttpError } from '../utils/httpError';
-import { findPerfil, listLogrosForUser, listPlantillas } from '../repositories/catalogRepository';
+import { findPerfil, listPlantillas } from '../repositories/catalogRepository';
+import { listAchievements } from '../services/achievementService';
 import { getUserPoints } from '../services/pointService';
 
 function requireUserId(req: Request): number {
@@ -21,7 +22,7 @@ export async function listPlantillasHandler(_req: Request, res: Response, next: 
 
 export async function listLogrosHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    res.status(200).json(await listLogrosForUser(requireUserId(req)));
+    res.status(200).json(await listAchievements(requireUserId(req)));
   } catch (err) {
     next(err);
   }
