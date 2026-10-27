@@ -2,13 +2,17 @@
   "name": "vitta-backend",
   "version": "0.1.0",
   "private": true,
-  "description": "Backend Vitta (HÁBITOS+) — HU-13 API de registro y autenticación",
+  "description": "Backend Vitta (HÁBITOS+) — API de hábitos, registros, rachas, puntos y logros",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "seed": "tsx src/db/seed.ts"
+    "seed": "tsx src/db/seed.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tests",
+    "migrate": "tsx src/db/migrate.ts",
+    "test": "node --import tsx --test --test-concurrency=1 \"tests/**/*.test.ts\"",
+    "test:unit": "node --import tsx --test \"tests/unit/*.test.ts\""
   },
   "engines": {
     "node": ">=18"

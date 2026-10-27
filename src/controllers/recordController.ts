@@ -1,6 +1,11 @@
 import type { NextFunction, Request, Response } from 'express';
 import { HttpError } from '../utils/httpError';
-import { createRecordService, deleteRecordService, listRecords } from '../services/recordService';
+import {
+  createRecordService,
+  deleteRecordService,
+  listRecords,
+  saveProgressService,
+} from '../services/recordService';
 
 function requireUserId(req: Request): number {
   const id = req.user?.id;
@@ -21,8 +26,17 @@ export async function listRecordsHandler(req: Request, res: Response, next: Next
 
 export async function createRecordHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const record = await createRecordService(requireUserId(req), req.params.id, req.body);
+    const record = await createRecordService(requireUserId(req), req.params.id, req.body, req.timeZone);
     res.status(201).json(record);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function saveProgressHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const record = await saveProgressService(requireUserId(req), req.params.id, req.body, req.timeZone);
+    res.status(200).json(record);
   } catch (err) {
     next(err);
   }
@@ -30,7 +44,12 @@ export async function createRecordHandler(req: Request, res: Response, next: Nex
 
 export async function deleteRecordHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const result = await deleteRecordService(requireUserId(req), req.params.id, req.params.registroId);
+    const result = await deleteRecordService(
+      requireUserId(req),
+      req.params.id,
+      req.params.registroId,
+      req.timeZone,
+    );
     res.status(200).json(result);
   } catch (err) {
     next(err);

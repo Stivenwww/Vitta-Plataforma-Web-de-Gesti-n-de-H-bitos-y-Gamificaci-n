@@ -1,4 +1,6 @@
+import type { Queryable } from '../db/pool';
 import {
+  deleteMovementForRecord as repoDeleteForRecord,
   getTotalPoints as repoTotal,
   insertMovementForRecord as repoInsert,
   listMovements as repoList,
@@ -17,6 +19,7 @@ export const NIVELES: ReadonlyArray<{ nivel: number; nombre: string; desde: numb
   { nivel: 6, nombre: 'Maestro de la Constancia', desde: 2000 },
 ];
 export const MOTIVO_HABITO_CUMPLIDO = 'habito_cumplido';
+export const MOTIVO_LOGRO_DESBLOQUEADO = 'logro_desbloqueado';
 
 export interface PointDependencies {
   insertMovement: (
@@ -24,13 +27,16 @@ export interface PointDependencies {
     registroId: number,
     puntos: number,
     motivo: string,
+    db?: Queryable,
   ) => Promise<boolean>;
+  deleteForRecord: (registroId: number, motivo: string, db?: Queryable) => Promise<void>;
   getTotal: (usuarioId: number) => Promise<number>;
   listMovements: (usuarioId: number, limit: number) => Promise<PointMovement[]>;
 }
 
 const defaultDependencies: PointDependencies = {
   insertMovement: repoInsert,
+  deleteForRecord: repoDeleteForRecord,
   getTotal: repoTotal,
   listMovements: repoList,
 };
@@ -67,6 +73,7 @@ export function computeLevel(puntosTotales: number): UserPoints {
 export async function awardPointsForRecord(
   usuarioId: number,
   registroId: number,
+  db?: Queryable,
   deps: PointDependencies = defaultDependencies,
 ): Promise<number> {
   const inserted = await deps.insertMovement(
@@ -74,8 +81,18 @@ export async function awardPointsForRecord(
     registroId,
     PUNTOS_POR_CUMPLIMIENTO,
     MOTIVO_HABITO_CUMPLIDO,
+    db,
   );
   return inserted ? PUNTOS_POR_CUMPLIMIENTO : 0;
+}
+
+/** El registro dejó de estar cumplido: retira sus puntos (como al desmarcar). */
+export async function revokePointsForRecord(
+  registroId: number,
+  db?: Queryable,
+  deps: PointDependencies = defaultDependencies,
+): Promise<void> {
+  await deps.deleteForRecord(registroId, MOTIVO_HABITO_CUMPLIDO, db);
 }
 
 /** HAB-122: puntos y nivel del usuario autenticado. */

@@ -1,19 +1,24 @@
 /**
  * Datos semilla para que el frontend pueda trabajar sin crear datos a mano.
- * Uso:  npm run seed
+ * Uso:  npm run migrate && npm run seed
  * Es repetible: borra y vuelve a crear SOLO los usuarios demo (correo @demo.vitta).
- * Las fechas son relativas a hoy (últimos 28 días, terminando AYER para que
- * "hoy" quede libre y se pueda marcar desde la app).
+ * Los catálogos (14 logros, 10 plantillas) usan ON CONFLICT y no se duplican.
+ * Las fechas son días locales de America/Bogota relativos a hoy (últimos 28
+ * días, terminando AYER para que "hoy" quede libre y se pueda marcar).
  */
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import bcrypt from 'bcrypt';
 import { pool } from './pool';
-import { computeStreaksFromRecords } from '../services/streakRecalc';
+import { recalculateStreak } from '../services/streakService';
+import { evaluateAchievements } from '../services/achievementService';
 import { PUNTOS_POR_CUMPLIMIENTO, MOTIVO_HABITO_CUMPLIDO } from '../services/pointService';
+import { addDays, isoWeekday } from '../services/progressService';
+import { DEFAULT_TIME_ZONE, todayIn, zonedInstant } from '../utils/timezone';
 
 const PASSWORD = 'Demo1234!';
 const DIAS = 28;
+const TZ = DEFAULT_TIME_ZONE;
 
 interface HabitSeed {
   nombre: string;
@@ -55,11 +60,6 @@ const HABITOS: HabitSeed[] = [
   },
 ];
 
-function diaUtc(offsetDesdeHoy: number): Date {
-  const hoy = new Date();
-  return new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate() + offsetDesdeHoy, 12, 0, 0));
-}
-
 async function main(): Promise<void> {
   const client = await pool.connect();
   try {
@@ -88,27 +88,27 @@ async function main(): Promise<void> {
     // Catálogos (logros y plantillas) desde el SQL versionado
     await client.query(readFileSync(join(__dirname, 'catalogos.sql'), 'utf8'));
 
+    const hoy = todayIn(TZ);
     let totalPuntos = 0;
     for (const h of HABITOS) {
       const hab = await client.query<{ id: number }>(
         `INSERT INTO habitos (usuario_id, nombre, meta, frecuencia, tipo, categoria, icono, meta_valor, unidad, dias_semana, creado_en)
          VALUES ($1,$2,$3,$4,'predefinido',$5,$6,$7,$8,$9,$10) RETURNING id`,
-        [usuarioId, h.nombre, h.meta, h.frecuencia, h.categoria, h.icono, h.meta_valor, h.unidad, h.dias_semana, diaUtc(-DIAS)],
+        [usuarioId, h.nombre, h.meta, h.frecuencia, h.categoria, h.icono, h.meta_valor, h.unidad, h.dias_semana,
+          zonedInstant(addDays(hoy, -DIAS), '08:00:00', TZ)],
       );
       const habitoId = hab.rows[0]!.id;
-      const registros: { fecha: string; cumplido: boolean }[] = [];
 
       for (let i = 0; i < DIAS; i += 1) {
-        const fecha = diaUtc(-(DIAS - i));
-        const dow = fecha.getUTCDay() === 0 ? 7 : fecha.getUTCDay();
-        const estado = h.patron(i, dow);
+        const dia = addDays(hoy, -(DIAS - i));
+        const estado = h.patron(i, isoWeekday(dia));
         if (estado === null) continue;
+        const fecha = zonedInstant(dia, '12:00:00', TZ);
         const r = await client.query<{ id: number }>(
-          `INSERT INTO registros_diarios (habito_id, fecha, cumplido, valor, reflexion)
-           VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-          [habitoId, fecha, estado, estado ? h.meta_valor : 0, estado && i % 7 === 0 ? 'Buen día, lo logré.' : null],
+          `INSERT INTO registros_diarios (habito_id, fecha, dia, cumplido, valor, reflexion)
+           VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+          [habitoId, fecha, dia, estado, estado ? h.meta_valor : 0, estado && i % 7 === 0 ? 'Buen día, lo logré.' : null],
         );
-        registros.push({ fecha: fecha.toISOString(), cumplido: estado });
         if (estado) {
           await client.query(
             `INSERT INTO movimientos_puntos (usuario_id, registro_id, puntos, motivo, creado_en)
@@ -118,27 +118,20 @@ async function main(): Promise<void> {
           totalPuntos += PUNTOS_POR_CUMPLIMIENTO;
         }
       }
-
-      const { actual, maxima } = computeStreaksFromRecords(registros);
-      await client.query(
-        `INSERT INTO rachas (habito_id, racha_actual, racha_maxima) VALUES ($1,$2,$3)
-         ON CONFLICT (habito_id) DO UPDATE SET racha_actual = $2, racha_maxima = $3, actualizado_en = now()`,
-        [habitoId, actual, maxima],
-      );
+      await recalculateStreak(habitoId, h.frecuencia, hoy, false, client);
     }
 
-    // Logros ya obtenidos por el usuario demo
-    await client.query(
-      `INSERT INTO usuario_logros (usuario_id, logro_id)
-       SELECT $1, id FROM logros WHERE nombre IN ('Primer Brote','Primer Impulso','Mente Curiosa')
-       ON CONFLICT DO NOTHING`,
-      [usuarioId],
-    );
+    // Logros: los mismos que obtendría el usuario usando la app (con su bono).
+    const { desbloqueados } = await evaluateAchievements(usuarioId, client);
+    const bono = desbloqueados.reduce((acc, l) => acc + l.puntos_bonus, 0);
 
     await client.query('COMMIT');
     console.log('Semilla lista.');
-    console.log('  demo@demo.vitta  /  ' + PASSWORD + '   (4 hábitos, 28 días de historial, ' + totalPuntos + ' VitaPuntos)');
-    console.log('  nuevo@demo.vitta /  ' + PASSWORD + '   (sin datos)');
+    console.log(
+      `  demo@demo.vitta  /  ${PASSWORD}   (4 hábitos, ${DIAS} días de historial, ${totalPuntos + bono} VitaPuntos, ` +
+        `logros: ${desbloqueados.map((l) => l.nombre).join(', ') || 'ninguno'})`,
+    );
+    console.log(`  nuevo@demo.vitta /  ${PASSWORD}   (sin datos)`);
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

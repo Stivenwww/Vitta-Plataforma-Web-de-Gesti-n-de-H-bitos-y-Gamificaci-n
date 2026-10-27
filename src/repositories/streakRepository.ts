@@ -1,10 +1,10 @@
-import { query } from '../db/pool';
+import { pool, type Queryable } from '../db/pool';
 import type { Streak } from '../models/streak';
 
 const SELECT_COLS = 'habito_id, racha_actual, racha_maxima';
 
-export async function findByHabit(habitoId: number): Promise<Streak | null> {
-  const result = await query<Streak>(
+export async function findByHabit(habitoId: number, db: Queryable = pool): Promise<Streak | null> {
+  const result = await db.query<Streak>(
     `SELECT ${SELECT_COLS} FROM rachas WHERE habito_id = $1`,
     [habitoId],
   );
@@ -15,8 +15,9 @@ export async function upsertStreak(
   habitoId: number,
   rachaActual: number,
   rachaMaxima: number,
+  db: Queryable = pool,
 ): Promise<Streak> {
-  const result = await query<Streak>(
+  const result = await db.query<Streak>(
     `INSERT INTO rachas (habito_id, racha_actual, racha_maxima, actualizado_en)
      VALUES ($1, $2, $3, now())
      ON CONFLICT (habito_id)

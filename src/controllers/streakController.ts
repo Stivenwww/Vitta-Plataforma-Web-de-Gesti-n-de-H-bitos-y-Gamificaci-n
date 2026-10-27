@@ -12,7 +12,7 @@ function requireUserId(req: Request): number {
 
 export async function getStreakHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const streak = await getStreak(requireUserId(req), req.params.id);
+    const streak = await getStreak(requireUserId(req), req.params.id, req.timeZone);
     res.status(200).json(streak);
   } catch (err) {
     next(err);

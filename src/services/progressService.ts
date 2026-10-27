@@ -1,22 +1,23 @@
 import { findByIdForUsuario as repoFindHabit } from '../repositories/habitRepository';
 import {
+  findCalendarHabitsByUsuario as repoFindCalendarHabits,
   findRecordDaysByHabit as repoFindRecordDays,
+  findRecordDaysByUsuario as repoFindUserRecordDays,
   type DayRecordRow,
+  type HabitCalendarRow,
 } from '../repositories/progressRepository';
 import type { Habit } from '../models/habit';
 import { HttpError } from '../utils/httpError';
 import { validateHabitId } from '../utils/validation';
+import { localDay, todayIn } from '../utils/timezone';
 
 // ---------------------------------------------------------------------------
-// Utilidades de fechas (días calendario UTC, `YYYY-MM-DD`). Puras.
+// Utilidades de fechas: días calendario locales del usuario (`YYYY-MM-DD`,
+// D-09). La aritmética sobre estas cadenas no depende de la zona. Puras.
 // ---------------------------------------------------------------------------
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DIA_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-export function todayUtc(now: Date = new Date()): string {
-  return now.toISOString().slice(0, 10);
-}
 
 export function addDays(day: string, n: number): string {
   return new Date(new Date(`${day}T00:00:00Z`).getTime() + n * DAY_MS).toISOString().slice(0, 10);
@@ -42,15 +43,16 @@ export function parseDia(raw: unknown, campo = 'fecha'): string {
 }
 
 /**
- * Día de referencia. Si el cliente no lo manda, hoy en UTC. Se acepta hasta
- * un día por delante de UTC (clientes al este de Greenwich); más allá → 400.
+ * Día de referencia. Si el cliente no lo manda, hoy en la zona del usuario.
+ * Se tolera un día por delante (cliente con reloj o zona más adelantados);
+ * más allá → 400.
  */
-export function resolveReferenceDay(raw: unknown, now: Date = new Date()): string {
+export function resolveReferenceDay(raw: unknown, now: Date, tz: string): string {
   if (raw === undefined || raw === null || raw === '') {
-    return todayUtc(now);
+    return todayIn(tz, now);
   }
   const day = parseDia(raw);
-  if (day > addDays(todayUtc(now), 1)) {
+  if (day > addDays(todayIn(tz, now), 1)) {
     throw new HttpError(400, 'fecha inválida: no puede ser futura');
   }
   return day;
@@ -112,6 +114,51 @@ export function parseFrecuencia(frecuencia: string): ReadonlySet<number> | null 
 
 export function isScheduled(schedule: ReadonlySet<number> | null, day: string): boolean {
   return schedule === null || schedule.has(isoWeekday(day));
+}
+
+/** Hábito con su vigencia expresada en días locales. */
+export interface HabitScheduleRow {
+  id: number;
+  nombre: string;
+  meta: string;
+  frecuencia: string;
+  activo: boolean;
+  /** Día local en que se creó el hábito. */
+  creado_dia: string;
+  /** Día local en que se archivó; null si sigue activo. */
+  archivado_dia: string | null;
+}
+
+export function toScheduleRows(rows: ReadonlyArray<HabitCalendarRow>, tz: string): HabitScheduleRow[] {
+  return rows.map((h) => ({
+    id: h.id,
+    nombre: h.nombre,
+    meta: h.meta,
+    frecuencia: h.frecuencia,
+    activo: h.activo,
+    creado_dia: localDay(new Date(h.creado_en), tz),
+    archivado_dia: h.archivado_en ? localDay(new Date(h.archivado_en), tz) : null,
+  }));
+}
+
+/**
+ * ¿El hábito "tocaba" ese día? Debe incluirlo su frecuencia y, si no hay
+ * registro, el día debe estar dentro de su vigencia (desde que se creó y
+ * antes de archivarse). Un registro existente siempre cuenta: es historial.
+ */
+export function habitDueOn(
+  h: Pick<HabitScheduleRow, 'creado_dia' | 'archivado_dia'>,
+  schedule: ReadonlySet<number> | null,
+  dia: string,
+  tieneRegistro: boolean,
+): boolean {
+  if (!isScheduled(schedule, dia)) {
+    return false;
+  }
+  if (tieneRegistro) {
+    return true;
+  }
+  return dia >= h.creado_dia && (h.archivado_dia === null || dia < h.archivado_dia);
 }
 
 // ---------------------------------------------------------------------------
@@ -218,21 +265,17 @@ const defaultDependencies: ProgressDependencies = {
   now: () => new Date(),
 };
 
-/** `creado_en` llega como Date en tiempo de ejecución aunque el tipo diga string. */
-export function dayOf(value: string | Date): string {
-  return new Date(value).toISOString().slice(0, 10);
-}
-
 /** HAB-131: progreso semanal o mensual de un hábito. */
 export async function getHabitProgress(
   usuarioId: number,
   habitoIdRaw: unknown,
   params: { periodo?: unknown; fecha?: unknown },
+  tz: string,
   deps: ProgressDependencies = defaultDependencies,
 ): Promise<HabitProgress> {
   const habitoId = validateHabitId(habitoIdRaw);
   const periodo = parsePeriodo(params.periodo);
-  const ref = resolveReferenceDay(params.fecha, deps.now());
+  const ref = resolveReferenceDay(params.fecha, deps.now(), tz);
   const habit = await deps.findHabit(habitoId, usuarioId);
   if (!habit) {
     throw new HttpError(404, 'hábito no encontrado');
@@ -242,9 +285,104 @@ export async function getHabitProgress(
   return buildHabitProgress({
     habitoId,
     frecuencia: habit.frecuencia,
-    creadoDia: dayOf(habit.creado_en),
+    // `creado_en` llega como Date en tiempo de ejecución aunque el tipo diga string.
+    creadoDia: localDay(new Date(habit.creado_en), tz),
     periodo,
     ref,
     registros,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Progreso agregado por día (GET /api/progress?desde&hasta)
+// ---------------------------------------------------------------------------
+
+export interface DailySummary {
+  fecha: string;
+  /** Hábitos que tocaban ese día. */
+  total: number;
+  /** De esos, los cumplidos. */
+  completados: number;
+  /** De esos, los que tienen avance (`valor > 0`) sin estar cumplidos. */
+  parciales: number;
+}
+
+/**
+ * Pura: resume cada día del rango. Cada hábito cuenta como máximo una vez
+ * por día (hay un único registro por hábito y día). Los días sin hábitos
+ * programados salen con total 0, para que la serie sea continua.
+ */
+export function buildDailySummary(input: {
+  desde: string;
+  hasta: string;
+  habitos: ReadonlyArray<HabitScheduleRow>;
+  registros: ReadonlyArray<Pick<DayRecordRow, 'habito_id' | 'dia' | 'cumplido' | 'valor'>>;
+}): DailySummary[] {
+  const porHabitoDia = new Map<string, Pick<DayRecordRow, 'cumplido' | 'valor'>>();
+  for (const r of input.registros) {
+    porHabitoDia.set(`${r.habito_id}|${r.dia}`, r);
+  }
+  const schedules = input.habitos.map((h) => [h, parseFrecuencia(h.frecuencia)] as const);
+  return eachDay(input.desde, input.hasta).map((fecha) => {
+    let total = 0;
+    let completados = 0;
+    let parciales = 0;
+    for (const [h, schedule] of schedules) {
+      const rec = porHabitoDia.get(`${h.id}|${fecha}`);
+      if (!habitDueOn(h, schedule, fecha, rec !== undefined)) {
+        continue;
+      }
+      total += 1;
+      if (rec?.cumplido) {
+        completados += 1;
+      } else if ((rec?.valor ?? 0) > 0) {
+        parciales += 1;
+      }
+    }
+    return { fecha, total, completados, parciales };
+  });
+}
+
+export const RANGO_MAX_DIAS = 366;
+
+export interface ProgressRangeDependencies {
+  findHabits: (usuarioId: number) => Promise<HabitCalendarRow[]>;
+  findRecordDays: (usuarioId: number, desde: string, hasta: string) => Promise<DayRecordRow[]>;
+  now: () => Date;
+}
+
+const defaultRangeDependencies: ProgressRangeDependencies = {
+  findHabits: repoFindCalendarHabits,
+  findRecordDays: repoFindUserRecordDays,
+  now: () => new Date(),
+};
+
+function dayCount(desde: string, hasta: string): number {
+  return Math.round((Date.parse(`${hasta}T00:00:00Z`) - Date.parse(`${desde}T00:00:00Z`)) / DAY_MS) + 1;
+}
+
+/**
+ * Progreso diario de todos los hábitos del usuario en [desde, hasta] con dos
+ * consultas en total (no una por hábito). Por defecto, los últimos 7 días.
+ */
+export async function getProgressRange(
+  usuarioId: number,
+  params: { desde?: unknown; hasta?: unknown },
+  tz: string,
+  deps: ProgressRangeDependencies = defaultRangeDependencies,
+): Promise<DailySummary[]> {
+  const hasta = resolveReferenceDay(params.hasta, deps.now(), tz);
+  const desde =
+    params.desde === undefined || params.desde === '' ? addDays(hasta, -6) : parseDia(params.desde, 'desde');
+  if (desde > hasta) {
+    throw new HttpError(400, 'rango inválido: desde no puede ser posterior a hasta');
+  }
+  if (dayCount(desde, hasta) > RANGO_MAX_DIAS) {
+    throw new HttpError(400, `rango inválido: máximo ${RANGO_MAX_DIAS} días`);
+  }
+  const [habitos, registros] = await Promise.all([
+    deps.findHabits(usuarioId),
+    deps.findRecordDays(usuarioId, desde, hasta),
+  ]);
+  return buildDailySummary({ desde, hasta, habitos: toScheduleRows(habitos, tz), registros });
 }

@@ -13,8 +13,9 @@ export interface AuthRepository {
 
 const defaultRepository: AuthRepository = { findByCorreo, createUser };
 
-function signToken(payload: { id: number; correo: string }): string {
-  return jwt.sign(payload, config.jwtSecret, {
+/** `tv` = versión de credenciales: un cambio de contraseña invalida los tokens previos. */
+export function signToken(user: Pick<User, 'id' | 'correo' | 'token_version'>): string {
+  return jwt.sign({ id: user.id, correo: user.correo, tv: user.token_version }, config.jwtSecret, {
     expiresIn: config.jwtExpiresIn as jwt.SignOptions['expiresIn'],
   });
 }
@@ -30,7 +31,7 @@ export async function register(body: unknown, repo: AuthRepository = defaultRepo
     const user = await repo.createUser(input.nombre, input.correo, passwordHash);
     return {
       usuario: toPublicUser(user),
-      token: signToken({ id: user.id, correo: user.correo }),
+      token: signToken(user),
     };
   } catch (err: unknown) {
     if (err && typeof err === 'object' && (err as { code?: string }).code === '23505') {
@@ -48,7 +49,7 @@ export async function login(body: unknown, repo: AuthRepository = defaultReposit
     throw new HttpError(401, 'credenciales inválidas');
   }
   return {
-    token: signToken({ id: user.id, correo: user.correo }),
+    token: signToken(user),
     usuario: toPublicUser(user),
   };
 }
