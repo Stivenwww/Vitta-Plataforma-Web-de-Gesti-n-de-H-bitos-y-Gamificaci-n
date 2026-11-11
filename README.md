@@ -323,6 +323,22 @@ Fechas: cada "día" es el día local del usuario. Por defecto `America/Bogota`; 
 
 Las respuestas de `POST /records` y `PATCH /progreso` incluyen, además del registro, `racha` y `logros_desbloqueados`.
 
+## 🧪 Pruebas
+
+- `npm test` corre las pruebas unitarias (`tests/unit`) y de integración (`tests/integration`).
+- Las de integración necesitan PostgreSQL: usan `TEST_DATABASE_URL` o `DATABASE_URL` y crean la base `vitta_test` en ese servidor. Si no hay PostgreSQL se saltan.
+- `npm run test:unit` corre solo las unitarias (no necesitan base de datos).
+
+## 📮 Colección de Postman
+
+En `postman/` están `Vitta.postman_collection.json` (todas las rutas) y `Vitta.postman_environment.json`.
+
+1. Importar los dos archivos en Postman y elegir el entorno **Vitta local**.
+2. En el entorno poner `password` (8+ caracteres) y, si hace falta, cambiar `baseUrl` (por defecto `http://localhost:3000`).
+3. Correr la colección completa con el Runner, en orden. El registro crea un usuario nuevo y el login guarda `{{token}}`.
+
+La carpeta **5. Casos: rachas y puntos** prueba marcar, desmarcar, día perdido, registro repetido (409) y fecha futura (400). Las fechas se calculan con la hora de Bogotá.
+
 ## 🚀 Despliegue
 
 Los pasos sirven para cualquier hosting que corra Node.js 18+ o Docker y tenga PostgreSQL.
