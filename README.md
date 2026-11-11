@@ -293,7 +293,7 @@ erDiagram
 ## ⚙️ Backend: ejecución
 
 ```bash
-cp .env.example .env        # DATABASE_URL, JWT_SECRET, ...
+cp .env.example .env        # DATABASE_URL, JWT_SECRET; en tu PC pon NODE_ENV=development
 npm install
 npm run migrate             # schema.sql + catalogos.sql en una transacción (idempotente)
 npm run seed                # opcional: demo@demo.vitta / Demo1234!
@@ -322,6 +322,41 @@ Fechas: cada "día" es el día local del usuario. Por defecto `America/Bogota`; 
 | GET | `/api/points/me`, `/api/points/me/movements`, `/api/dashboard`, `/api/plantillas` | Puntos, dashboard y plantillas |
 
 Las respuestas de `POST /records` y `PATCH /progreso` incluyen, además del registro, `racha` y `logros_desbloqueados`.
+
+## 🚀 Despliegue
+
+Los pasos sirven para cualquier hosting que corra Node.js 18+ o Docker y tenga PostgreSQL.
+
+1. **Crear la base de datos** PostgreSQL (versión 14 o más) y copiar su URL de conexión.
+2. **Variables de entorno** en el servidor (ver `.env.example`):
+
+   | Variable | Valor |
+   |---|---|
+   | `DATABASE_URL` | URL de la base, p. ej. `postgresql://USUARIO:CLAVE@HOST:5432/vitta` (obligatoria) |
+   | `JWT_SECRET` | Secreto largo y propio, mínimo 32 caracteres (obligatoria). Generarlo con `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
+   | `NODE_ENV` | `production` |
+   | `PORT` | Puerto de la API (si el hosting no lo pone solo) |
+
+   Con `NODE_ENV=production` el servidor no arranca si falta `DATABASE_URL` o `JWT_SECRET`, o si el secreto es corto.
+3. **Compilar y migrar**:
+   - Sin Docker:
+     ```bash
+     npm ci
+     npm run build              # compila a dist/ y copia los .sql
+     npm run migrate:prod       # crea tablas y carga los 14 logros y 10 plantillas
+     npm start                  # node dist/index.js
+     ```
+   - Con Docker:
+     ```bash
+     docker build -t vitta-backend .
+     docker run --rm --env-file .env vitta-backend node dist/db/migrate.js
+     docker run -d --env-file .env -p 3000:3000 vitta-backend
+     ```
+4. **Datos demo (opcional)**: `npm run seed:prod` (o `node dist/db/seed.js` en Docker) crea `demo@demo.vitta` / `Demo1234!`. Esa clave es pública: no lo corras en un servidor real con usuarios, o cambia la clave después.
+5. **Probar**: `GET https://TU-SERVIDOR/health` debe responder `{"ok":true}`.
+6. **Conectar la app**: generar el APK con `./gradlew assembleRelease -Pvitta.baseUrl=https://TU-SERVIDOR/api/` (ver README de la app). Usar HTTPS: el APK de release no permite HTTP.
+
+CORS: no se configura porque el único cliente es la app Android (CORS solo aplica a navegadores). Si se hace un cliente web habría que agregarlo.
 
 
 ---
