@@ -1,0 +1,38 @@
+# Despliegue en Render (Blueprint): base PostgreSQL + API.
+# En Render: New → Blueprint → elegir este repositorio. Crea los dos servicios
+# y conecta DATABASE_URL solo. JWT_SECRET lo genera Render (no está en git).
+
+databases:
+  - name: vitta-db
+    plan: free
+    region: virginia
+    databaseName: vitta
+    user: vitta
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: vitta-api
+    runtime: node
+    plan: free
+    region: virginia
+    # devDependencies hacen falta para compilar (typescript).
+    buildCommand: npm ci --include=dev && npm run build
+    # La migración es idempotente: se aplica en cada arranque (el plan free
+    # no tiene preDeployCommand).
+    startCommand: node dist/db/migrate.js && node dist/index.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vitta-db
+          property: connectionString

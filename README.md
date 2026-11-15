@@ -341,7 +341,9 @@ La carpeta **5. Casos: rachas y puntos** prueba marcar, desmarcar, día perdido,
 
 ## 🚀 Despliegue
 
-Los pasos sirven para cualquier hosting que corra Node.js 18+ o Docker y tenga PostgreSQL.
+**Render (recomendado):** el archivo `render.yaml` crea la base PostgreSQL y la API. En Render: *New → Blueprint* → elegir este repositorio → *Apply*. `DATABASE_URL` y `JWT_SECRET` se configuran solos y la migración corre en cada arranque. En el plan gratuito la API se duerme tras 15 min sin uso (la primera petición tarda ~1 min) y la base gratuita vence a los 30 días.
+
+Los pasos siguientes sirven para cualquier otro hosting que corra Node.js 18+ o Docker y tenga PostgreSQL.
 
 1. **Crear la base de datos** PostgreSQL (versión 14 o más) y copiar su URL de conexión.
 2. **Variables de entorno** en el servidor (ver `.env.example`):
